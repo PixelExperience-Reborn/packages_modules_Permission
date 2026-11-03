@@ -1,0 +1,68 @@
+name: Import verified AOSP17 Permission module exact source
+
+on:
+  push:
+    branches:
+      - port/a17-permission-import-20261103
+    paths:
+      - .github/workflows/aosp17-permission-import.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: aosp17-permission-import
+  cancel-in-progress: false
+
+jobs:
+  import-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    env:
+      SOURCE_SHA: 1093eca7407576c72e51b1a88550ee0667a6e5dc
+      SOURCE_TREE: 5f0dfec33529cfff7ad08c9e61f480e445a59d8b
+      TARGET_BRANCH: port/a17-permission-aosp17-base-20261103
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Fetch pinned official Google source and check exact commit and tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir "$RUNNER_TEMP/aosp-permission"
+          cd "$RUNNER_TEMP/aosp-permission"
+          git init -q
+          git remote add aosp https://android.googlesource.com/platform/packages/modules/Permission
+          git -c protocol.version=2 fetch --no-tags --depth=1 --filter=blob:none \
+            aosp refs/tags/android-17.0.0_r1
+          test "$(git rev-parse 'FETCH_HEAD^{commit}')" = "$SOURCE_SHA"
+          test "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$SOURCE_TREE"
+          git cat-file -e "$SOURCE_TREE^{tree}"
+          echo "PASS: official Permission source $SOURCE_SHA tree $SOURCE_TREE"
+      - name: Publish independent, non-forced exact AOSP17 source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$RUNNER_TEMP/aosp-permission"
+          git remote add publish "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          ref="refs/heads/$TARGET_BRANCH"
+          existing="$(git ls-remote --heads publish "$ref" | cut -f1)"
+          if [ -n "$existing" ]; then
+            git -c protocol.version=2 fetch --no-tags --depth=1 --filter=blob:none publish "$ref"
+            test "$(git rev-parse 'FETCH_HEAD^{tree}')" = "$SOURCE_TREE" || {
+              echo "Different existing tree. Refusing overwrite"
+              exit 1
+            }
+            echo "PASS: existing source branch has verified AOSP17 tree"
+            exit 0
+          fi
+          export GIT_AUTHOR_NAME="PixelExperience-Reborn CI"
+          export GIT_AUTHOR_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+          export GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+          export GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+          snapshot="$(printf 'Permission: verified AOSP17 r1 source snapshot\n\nGoogle source commit: %s\nExact source tree: %s\nUpstream Git ancestry not mirrored. Historical PE seventeen unchanged.\n' \
+            "$SOURCE_SHA" "$SOURCE_TREE" | git commit-tree "$SOURCE_TREE")"
+          test "$(git rev-parse "$snapshot^{tree}")" = "$SOURCE_TREE"
+          git -c protocol.version=2 push --no-thin publish "$snapshot:$ref"
+          test "$(git ls-remote --heads publish "$ref" | cut -f1)" = "$snapshot"
+          echo "PASS: Permission source snapshot $snapshot, tree $SOURCE_TREE"
